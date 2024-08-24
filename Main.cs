@@ -37,6 +37,7 @@ namespace KillStreakRewards {
 
             RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath, HookMode.Post);
             RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnect, HookMode.Post);
+            RegisterEventHandler<EventRoundStart>(OnRoundStart, HookMode.Post);
             RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
         }
 
@@ -45,6 +46,7 @@ namespace KillStreakRewards {
 
             DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath, HookMode.Post);
             DeregisterEventHandler<EventPlayerConnectFull>(OnPlayerConnect, HookMode.Post);
+            DeregisterEventHandler<EventRoundStart>(OnRoundStart, HookMode.Post);
 
             _connection?.Dispose();
         }
@@ -53,6 +55,16 @@ namespace KillStreakRewards {
             Config = config;
         }
 
+        private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info) {
+            
+            foreach (var player in PlayerStats.Keys.ToList()) {
+                Task.Run(async () => await HandleRewards(player));
+            }
+
+            PlayerStats.Clear();
+
+            return HookResult.Continue;
+        }
         private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info) {
             if (@event.Attacker == null || @event.Userid == null) {
                 return HookResult.Continue;
@@ -71,9 +83,6 @@ namespace KillStreakRewards {
             if (PlayerStats.ContainsKey(Player)) {
                 PlayerStats[Player] = 0;
             }
-
-           
-            AddTimer(0.1f, async () => await HandleRewards(Attacker));
 
             return HookResult.Continue;
         }
