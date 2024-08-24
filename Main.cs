@@ -54,7 +54,7 @@ namespace KillStreakRewards {
         }
 
         private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info) {
-            if (@event.Attacker == null || @event.Userid == null || @event.Attacker == @event.Userid) {
+            if (@event.Attacker == null || @event.Userid == null) {
                 return HookResult.Continue;
             }
 
