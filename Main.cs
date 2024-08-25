@@ -11,7 +11,7 @@ namespace KillStreakRewards {
 
     public class Main : BasePlugin, IPluginConfig<MainConfig>
     {
-        public override string ModuleName => "eboyfriends";
+        public override string ModuleName => "Killstreak-Rewards";
         public override string ModuleVersion => "6.6.6";
         public override string ModuleAuthor => "eboyfriends";
         private MySqlConnection _connection = null!;
