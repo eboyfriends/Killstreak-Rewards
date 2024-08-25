@@ -55,13 +55,12 @@ namespace KillStreakRewards {
             Config = config;
         }
 
-        private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info) {
-            
-            foreach (var player in PlayerStats.Keys.ToList()) {
-                Task.Run(async () => await HandleRewards(player));
-            }
-
-            PlayerStats.Clear();
+       private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info) {
+            Server.NextFrame(() => {
+                foreach (var player in PlayerStats.Keys.ToList()) {
+                    HandleRewards(player);
+                }
+            });
 
             return HookResult.Continue;
         }
@@ -87,26 +86,33 @@ namespace KillStreakRewards {
             return HookResult.Continue;
         }
 
-        private async Task HandleRewards(CCSPlayerController playerController) {
+        private void HandleRewards(CCSPlayerController playerController) {
             if (!PlayerStats.TryGetValue(playerController, out int killStreak)) return;
 
             var steamId = playerController.AuthorizedSteamID?.SteamId64;
             if (steamId == null) return;
 
-            if (killStreak == 6) {
-                var selectedGrenade = await GetSelectedGrenade(steamId.Value);
-                if (!string.IsNullOrEmpty(selectedGrenade)) {
-                    Server.NextFrame(() => GiveReward(playerController, "weapon_" + selectedGrenade));
-                }
+            if (killStreak >= 12 && !HasItem(playerController, "weapon_flashbang")) {
+                GiveReward(playerController, "weapon_flashbang", 12);
             }
-            else if (killStreak == 8) {
-                Server.NextFrame(() => GiveReward(playerController, "weapon_taser"));
+            
+            if (killStreak >= 8 && !HasItem(playerController, "weapon_taser")) {
+                GiveReward(playerController, "weapon_taser", 8);
             }
-            else if (killStreak == 12) {
-                Server.NextFrame(() => GiveReward(playerController, "weapon_flashbang"));
+            
+            if (killStreak >= 6) {
+                Task.Run(async () => {
+                    var selectedGrenade = await GetSelectedGrenade(steamId.Value);
+                    if (!string.IsNullOrEmpty(selectedGrenade)) {
+                        Server.NextFrame(() => {
+                            if (!HasItem(playerController, "weapon_" + selectedGrenade)) {
+                                GiveReward(playerController, "weapon_" + selectedGrenade, 6);
+                            }
+                        });
+                    }
+                });
             }
         }
-
         private async Task<string> GetSelectedGrenade(ulong steamId) {
             var result = await _connection.QueryFirstOrDefaultAsync<string>($@"
                 SELECT `SelectedGrenade` FROM `{_tableName}` WHERE `steamid` = @SteamId;",
@@ -115,10 +121,10 @@ namespace KillStreakRewards {
             return result ?? "smokegrenade"; // Default to smoke grenade if not set
         }
 
-        private void GiveReward(CCSPlayerController player, string reward) {
+        private void GiveReward(CCSPlayerController player, string reward, int killStreak) {
             Server.NextFrame(() => {
                 player.GiveNamedItem(reward);
-                player.PrintToChat($"You've been awarded a {reward} for your {PlayerStats[player]} kill streak!");
+                player.PrintToChat($"You've been awarded a {reward} for your {killStreak} kill streak!");
             });
         }
 
@@ -202,6 +208,12 @@ namespace KillStreakRewards {
 
         public bool IsValidReward(string name) {
             return Config.GrenadeRewards.Contains(name);
+        }
+
+        private static bool HasItem(CCSPlayerController player, string itemName) {
+            var weapons = player?.PlayerPawn?.Value?.WeaponServices?.MyWeapons;
+            if (weapons != null) return weapons.Any(weapon => weapon.IsValid && weapon?.Value?.DesignerName == itemName);
+            return false;
         }
     }
 }
