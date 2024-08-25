@@ -1,6 +1,6 @@
 # Roadmap
 - [] Better Configuration
-- [] Logic OnRoundStart repeats rewards. 
+- [] Logic OnRoundStart. 
 
 Add and/or remove rewards with config: 
 
