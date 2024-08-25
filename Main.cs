@@ -17,7 +17,7 @@ namespace KillStreakRewards {
         private MySqlConnection _connection = null!;
         public required MainConfig Config { get; set; }
         private string _tableName = string.Empty;
-        private Dictionary<CCSPlayerController, int> PlayerStats = new(); // CCSPlayerController, KillStreak
+        private Dictionary<CCSPlayerController, (int KillStreak, int HighestRewardGiven)> PlayerStats = new();
 
         public override void Load(bool hotReload)  {
             Logger.LogInformation("We are loading KillStreakRewards!");
@@ -55,7 +55,7 @@ namespace KillStreakRewards {
             Config = config;
         }
 
-       private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info) {
+        private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info) {
             Server.NextFrame(() => {
                 foreach (var player in PlayerStats.Keys.ToList()) {
                     HandleRewards(player);
@@ -72,45 +72,49 @@ namespace KillStreakRewards {
             CCSPlayerController Player = @event.Userid;
             CCSPlayerController Attacker = @event.Attacker;
 
-            if (PlayerStats.TryGetValue(Attacker, out int value)) {
-                PlayerStats[Attacker] = ++value;
+            if (PlayerStats.TryGetValue(Attacker, out var stats)) {
+                PlayerStats[Attacker] = (stats.KillStreak + 1, stats.HighestRewardGiven);
             }
             else {
-                PlayerStats[Attacker] = 1;
+                PlayerStats[Attacker] = (1, 0);
             }
 
             if (PlayerStats.ContainsKey(Player)) {
-                PlayerStats[Player] = 0;
+                PlayerStats[Player] = (0, 0); 
             }
 
             return HookResult.Continue;
         }
 
         private void HandleRewards(CCSPlayerController playerController) {
-            if (!PlayerStats.TryGetValue(playerController, out int killStreak)) return;
+            if (!PlayerStats.TryGetValue(playerController, out var stats)) return;
 
             var steamId = playerController.AuthorizedSteamID?.SteamId64;
             if (steamId == null) return;
 
-            if (killStreak >= 12 && !HasItem(playerController, "weapon_flashbang")) {
-                GiveReward(playerController, "weapon_flashbang", 12);
-            }
-            
-            if (killStreak >= 8 && !HasItem(playerController, "weapon_taser")) {
-                GiveReward(playerController, "weapon_taser", 8);
-            }
-            
-            if (killStreak >= 6) {
+            int killStreak = stats.KillStreak;
+            int highestRewardGiven = stats.HighestRewardGiven;
+
+            if (killStreak >= 6 && highestRewardGiven < 1) {
                 Task.Run(async () => {
                     var selectedGrenade = await GetSelectedGrenade(steamId.Value);
                     if (!string.IsNullOrEmpty(selectedGrenade)) {
                         Server.NextFrame(() => {
                             if (!HasItem(playerController, "weapon_" + selectedGrenade)) {
                                 GiveReward(playerController, "weapon_" + selectedGrenade, 6);
+                                PlayerStats[playerController] = (killStreak, 1);
                             }
                         });
                     }
                 });
+            }
+            if (killStreak >= 8 && highestRewardGiven < 2 && !HasItem(playerController, "weapon_taser")) {
+                GiveReward(playerController, "weapon_taser", 8);
+                PlayerStats[playerController] = (killStreak, 2);
+            }
+            if (killStreak >= 12 && highestRewardGiven < 3 && !HasItem(playerController, "weapon_flashbang")) {
+                GiveReward(playerController, "weapon_flashbang", 12);
+                PlayerStats[playerController] = (killStreak, 3);
             }
         }
         private async Task<string> GetSelectedGrenade(ulong steamId) {
@@ -162,8 +166,8 @@ namespace KillStreakRewards {
         public void OnStreakCommand(CCSPlayerController? player, CommandInfo commandInfo) {
             if (player == null) return;
 
-            if (PlayerStats.TryGetValue(player, out int killStreak)) {
-                player.PrintToChat($"Your current kill streak is: {killStreak}");
+            if (PlayerStats.TryGetValue(player, out var stats)) {
+                player.PrintToChat($"Your current kill streak is: {stats.KillStreak}");
             }
             else {
                 player.PrintToChat("You don't have an active kill streak.");
