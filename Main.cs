@@ -17,7 +17,7 @@ namespace KillStreakRewards {
         private MySqlConnection _connection = null!;
         public required MainConfig Config { get; set; }
         private string _tableName = string.Empty;
-        private Dictionary<CCSPlayerController, (int KillStreak, int HighestRewardGiven)> PlayerStats = new();
+        private Dictionary<CCSPlayerController, (int KillStreak, int HighestRewardGiven, int PreviousRoundKillStreak)> PlayerStats = new();
 
         public override void Load(bool hotReload)  {
             Logger.LogInformation("We are loading KillStreakRewards!");
@@ -72,15 +72,15 @@ namespace KillStreakRewards {
             CCSPlayerController Player = @event.Userid;
             CCSPlayerController Attacker = @event.Attacker;
 
-            if (PlayerStats.TryGetValue(Attacker, out var stats)) {
-                PlayerStats[Attacker] = (stats.KillStreak + 1, stats.HighestRewardGiven);
+            if (PlayerStats.TryGetValue(Attacker, out var attackerStats)) {
+                PlayerStats[Attacker] = (attackerStats.KillStreak + 1, attackerStats.HighestRewardGiven, attackerStats.PreviousRoundKillStreak);
             }
             else {
-                PlayerStats[Attacker] = (1, 0);
+                PlayerStats[Attacker] = (1, 0, 0);
             }
 
-            if (PlayerStats.ContainsKey(Player)) {
-                PlayerStats[Player] = (0, 0); 
+            if (PlayerStats.TryGetValue(Player, out var playerStats)) {
+                PlayerStats[Player] = (0, 0, playerStats.KillStreak); 
             }
 
             return HookResult.Continue;
@@ -94,27 +94,28 @@ namespace KillStreakRewards {
 
             int killStreak = stats.KillStreak;
             int highestRewardGiven = stats.HighestRewardGiven;
+            int PreviousRoundKillStreak = stats.PreviousRoundKillStreak;
 
-            if (killStreak >= 6 && highestRewardGiven < 1) {
+            if (PreviousRoundKillStreak >= 6 && highestRewardGiven < 1) {
                 Task.Run(async () => {
                     var selectedGrenade = await GetSelectedGrenade(steamId.Value);
                     if (!string.IsNullOrEmpty(selectedGrenade)) {
                         Server.NextFrame(() => {
                             if (!HasItem(playerController, "weapon_" + selectedGrenade)) {
                                 GiveReward(playerController, "weapon_" + selectedGrenade, 6);
-                                PlayerStats[playerController] = (killStreak, 1);
+                                PlayerStats[playerController] = (killStreak, 1, PreviousRoundKillStreak);
                             }
                         });
                     }
                 });
             }
-            if (killStreak >= 8 && highestRewardGiven < 2 && !HasItem(playerController, "weapon_taser")) {
+            if (PreviousRoundKillStreak >= 8 && highestRewardGiven < 2 && !HasItem(playerController, "weapon_taser")) {
                 GiveReward(playerController, "weapon_taser", 8);
-                PlayerStats[playerController] = (killStreak, 2);
+                PlayerStats[playerController] = (killStreak, 2, PreviousRoundKillStreak);
             }
-            if (killStreak >= 12 && highestRewardGiven < 3 && !HasItem(playerController, "weapon_flashbang")) {
+            if (PreviousRoundKillStreak >= 12 && highestRewardGiven < 3 && !HasItem(playerController, "weapon_flashbang")) {
                 GiveReward(playerController, "weapon_flashbang", 12);
-                PlayerStats[playerController] = (killStreak, 3);
+                PlayerStats[playerController] = (killStreak, 3, PreviousRoundKillStreak);
             }
         }
         private async Task<string> GetSelectedGrenade(ulong steamId) {
