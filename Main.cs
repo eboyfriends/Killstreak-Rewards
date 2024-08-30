@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Data.Common;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
@@ -11,16 +12,18 @@ using MySqlConnector;
 
 namespace KillStreakRewards {
 
-    public class Main : BasePlugin, IPluginConfig<MainConfig>
+    public partial class Main : BasePlugin, IPluginConfig<MainConfig>
     {
         // Changed modulename to match DLL so I can refer to ModuleName in config folder.
         public override string ModuleName => "KillStreakRewards";
         public override string ModuleVersion => "7.7.7";
         public override string ModuleAuthor => "eboyfriends";
-        private MySqlConnection _connection = null!;
+        private string? _connectionString = null;
         public required MainConfig Config { get; set; }
         private string _tableName = string.Empty;
         private Dictionary<ulong, PlayerKillstreakInfo> PlayerStats = new();
+        private Queries _queries = null!;
+        private bool _late = false;
 
         public override void Load(bool hotReload)  {
             Logger.LogInformation("We are loading KillStreakRewards!");
@@ -30,41 +33,17 @@ namespace KillStreakRewards {
             RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn, HookMode.Post);
             RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
 
-            bool late = !string.IsNullOrEmpty(Server.MapName);
+            _late = !string.IsNullOrEmpty(Server.MapName);
 
             // Load happens AFTER OnConfigParsed (so I've learned after wasting a lot of time debugging >_>.
             // OFC, this is my fault for moving stuff there in the first place).
-            _connection = Config.DatabaseConfig.CreateConnection();
-            _connection.Open();
-
-            List<ulong>? steamIDs = null;
-            if (late)
+            IEnumerable<ulong>? steamIDs = null;
+            if (_late)
             {
-                steamIDs = Utilities.GetPlayers().Select(player => player.SteamID).ToList();
+                steamIDs = Utilities.GetPlayers().Select(player => player.SteamID);
             }
 
-            Task.Run(async () =>
-            {
-                await _connection.ExecuteAsync($@"
-                    CREATE TABLE IF NOT EXISTS `{_tableName}` (
-                        `steamid` BIGINT UNSIGNED NOT NULL,
-                        `SelectedGrenade` VARCHAR(255) NOT NULL DEFAULT 'weapon_smokegrenade',
-                        PRIMARY KEY (`steamid`));");
-
-                // If plugin is late loaded (Server.MapName != null), grab everyone's preferences.
-                if (late)
-                {
-                    var results = await _connection.QueryAsync<(ulong steamID, string grenade)>(
-                    $"SELECT `steamid` as steamID, `SelectedGrenade` as grenade FROM `{_tableName}` WHERE `steamid` IN @SteamIds;",
-                    new { SteamIds = steamIDs! });
-                    foreach ((ulong steamID, string grenade) in results)
-                    {
-                        PlayerKillstreakInfo stats = new();
-                        stats.SetNadePreference(grenade);
-                        PlayerStats.Add(steamID, stats);
-                    }
-                }
-            });
+            Task.Run(() => CreateTableAsync(steamIDs!));
         }
 
         public override void Unload(bool hotReload) {
@@ -72,8 +51,6 @@ namespace KillStreakRewards {
 
             DeregisterEventHandler<EventPlayerDeath>(OnPlayerDeath, HookMode.Post);
             DeregisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn, HookMode.Post);
-
-            _connection?.Dispose();
         }
 
         public void OnConfigParsed(MainConfig config) {
@@ -81,6 +58,8 @@ namespace KillStreakRewards {
             ReloadConfig();
             MainConfig.Rewards = Config.AllRewards;
             _tableName = Config.DatabaseConfig.Table;
+            _queries = new(_tableName);
+            _connectionString = Config.DatabaseConfig.GetConnectionString();
         }
         public void ReloadConfig()
         {
@@ -139,30 +118,7 @@ namespace KillStreakRewards {
             var player = Utilities.GetPlayerFromSlot(playerSlot);
             if (player == null) return;
 
-            Task.Run(async () =>
-            {
-                try
-                {
-                    var result = await _connection.QueryFirstOrDefaultAsync<string>(
-                        $"SELECT `SelectedGrenade` FROM {_tableName} WHERE `steamid` = @SteamId;",
-                        new { SteamId = steamId.SteamId64 });
-
-                    if (result != null)
-                    {
-                        Server.NextFrame(() => {
-                            player.PrintToChat($"Your default grenade is set to: {result}");
-                            // Cache their nade preference, so we don't need to do a database query every time...
-                            PlayerKillstreakInfo stats = new();
-                            stats.SetNadePreference(result);
-                            PlayerStats.Add(player.SteamID, stats);
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError("{message}", ex.Message);
-                }
-            });
+            Task.Run(() => SelectNadePreferenceAsync(player, player.SteamID));
         }
 
         private void OnClientDisconnect(int playerSlot) {
@@ -187,12 +143,8 @@ namespace KillStreakRewards {
         public void OnNadeCommand(CCSPlayerController? player, CommandInfo commandInfo) {
             if (player == null) return;
 
-            var steamId = player.AuthorizedSteamID?.SteamId64;
-            if (steamId == null)
-            {
-                Logger.LogError("{message}", $"Failed to find SteamID for player: {player.PlayerName}");
-                return;
-            }
+            // Removed the authorized steamID check. Apparently, it may take as long as an entire map for a player's SteamID to be authorized? IDK...
+            var steamId = player.SteamID;
             if (Config.AllRewards == null)
             {
                 Logger.LogError("{message}", "Missing Rewards in Config");
@@ -201,12 +153,6 @@ namespace KillStreakRewards {
             PlayerStats.TryGetValue(player.SteamID, out var stats);
 
             var value = commandInfo.GetArg(1);
-            if (string.IsNullOrEmpty(value) && stats != null)
-            {
-                player.PrintToChat($"Your default grenade reward is: \"{stats.GetNadePreference()}\".");
-                return;
-            }
-
             var reward = Config.AllRewards.Where(reward => value.Equals(reward.Shortname)).FirstOrDefault();
             if (reward == null)
             {
@@ -217,30 +163,7 @@ namespace KillStreakRewards {
             if (stats != null)
             {
                 stats.SetNadePreference(reward.Item);
-                Task.Run(async () =>
-                {
-                    try
-                    {
-                        await _connection.ExecuteAsync($@"
-                    INSERT INTO `{_tableName}` (`steamid`, `SelectedGrenade`) 
-                    VALUES (@SteamId, @Value)
-                    ON DUPLICATE KEY UPDATE `SelectedGrenade` = @Value;",
-                        new
-                        {
-                            SteamId = steamId,
-                            Value = reward.Item
-                        });
-
-                        Server.NextFrame(() =>
-                        {
-                            player.PrintToChat($"Changed default grenade to {reward.Item}");
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogError("{message}", ex.Message);
-                    }
-                });
+                Task.Run(() => InsertNadePreferenceAsync(player, player.SteamID, reward.Item));
             }
         }
     }

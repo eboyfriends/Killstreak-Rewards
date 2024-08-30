@@ -45,7 +45,7 @@ namespace KillStreakRewards{
 		[JsonPropertyName("sslmode")]
 		public string Sslmode { get; set; } = "none";
 
-        public MySqlConnection CreateConnection() {
+        public string GetConnectionString() {
             MySqlConnectionStringBuilder builder = new MySqlConnectionStringBuilder
             {
                 Server = Host,
@@ -56,7 +56,7 @@ namespace KillStreakRewards{
                 SslMode = Enum.Parse<MySqlSslMode>(Sslmode, true),
             };
 
-            return new MySqlConnection(builder.ToString());
+            return builder.ConnectionString;
         }
     }
 }
