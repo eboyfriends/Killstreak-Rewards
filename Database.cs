@@ -1,10 +1,8 @@
 ﻿using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Entities;
 using Dapper;
 using Microsoft.Extensions.Logging;
 using MySqlConnector;
-using System.Numerics;
 
 namespace KillStreakRewards
 {
@@ -92,14 +90,13 @@ namespace KillStreakRewards
                 if (result != null)
                 {
                     // Cache their nade preference, so we don't need to do a database query every time...
-                    PlayerKillstreakInfo stats = new();
+                    if (!PlayerStats.TryGetValue(steamID, out var stats))
+                    {
+                        stats = new();
+                        PlayerStats.Add(steamID, stats);
+                    }
                     stats.SetNadePreference(result);
-                    PlayerStats.Add(steamID, stats);
                     Server.NextFrame(() => player.PrintToChat($"Your default grenade is set to: {result}"));
-                }
-                else
-                {
-                    Server.NextFrame(() => Logger.LogError("{message}", "SelectNadePreference Query Failed!"));
                 }
             }
             catch (Exception ex)
